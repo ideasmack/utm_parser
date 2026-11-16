@@ -61,8 +61,48 @@ class TestServer(unittest.TestCase):
         code, rows = self.req("/api/records")
         self.assertEqual((code, rows[0]["utm_campaign"]), (200, "c"))
 
-    def test_capture_requires_fields(self):
-        self.assertEqual(self.req("/api/capture", {"input": "utm_source=a"})[0], 422)
+    def test_capture_incomplete_utm_saved_with_warnings(self):
+        code, body = self.req("/api/capture", {"input": "utm_source=a"})
+        self.assertEqual(code, 201); self.assertIn("missing required utm_campaign", body["warnings"])
+
+    def test_capture_nothing_to_record_is_422(self):
+        self.assertEqual(self.req("/api/capture", {"input": "https://x.com/"})[0], 422)
+
+    def test_parse_includes_pos_mapping(self):
+        code, body = self.req("/api/parse", {"input": "https://x.com/?gclid=abc"})
+        self.assertEqual((code, body["pos"]["lead_source"], body["pos"]["lead_channel"]), (200, "Google", "Paid Search"))
+        code, body = self.req("/api/parse", {"input": "https://x.com/", "referrer": "https://www.google.com/"})
+        self.assertEqual(body["pos"]["lead_channel"], "Organic Search")
+
+    def test_referrer_must_be_string(self):
+        self.assertEqual(self.req("/api/parse", {"input": "x", "referrer": 5})[0], 400)
+
+    def test_unmapped_queue(self):
+        for _ in range(2):
+            self.req("/api/capture", {"input": "utm_source=zzpartner&utm_medium=blast&utm_campaign=c"})
+        code, rows = self.req("/api/unmapped")
+        row = next(r for r in rows if r["utm_source"] == "zzpartner")
+        self.assertEqual((code, row["count"]), (200, 2))
+        code, records = self.req("/api/records")
+        self.assertEqual((records[0]["pos_lead_source"], records[0]["mapped"]), ("Unknown", 0))
+
+    def test_mapping_info(self):
+        code, body = self.req("/api/mapping")
+        self.assertEqual(code, 200); self.assertIn("Google", body["lead_sources"])
+
+    def test_old_database_is_upgraded(self):
+        import sqlite3
+        old = os.path.join(self.tmp.name, "old.db")
+        with sqlite3.connect(old) as db:
+            db.execute("CREATE TABLE utm_attribution (id INTEGER PRIMARY KEY, utm_source TEXT)")
+        saved, server.DB_PATH = server.DB_PATH, old
+        try:
+            server.init_db()
+            with sqlite3.connect(old) as db:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(utm_attribution)")}
+            self.assertTrue({"pos_lead_source", "mapped", "rules_version"} <= cols)
+        finally:
+            server.DB_PATH = saved
 
     def test_serves_shared_js_parser(self):
         with urllib.request.urlopen(self.base + "/utm-parser/utm_parser.js") as resp:

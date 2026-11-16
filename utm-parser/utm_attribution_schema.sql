@@ -19,8 +19,15 @@ CREATE TABLE utm_attribution (
     landing_url           VARCHAR(2000) NULL,   -- parser truncates to 2000 chars
     referrer              VARCHAR(2000) NULL,
     session_id            VARCHAR(128)  NULL,
+    -- POS mapping (utm_mapping.py): what was sent to the POS and which rule decided it
+    pos_lead_source       VARCHAR(100)  NOT NULL,
+    pos_lead_channel      VARCHAR(100)  NOT NULL,
+    mapped                BIT           NOT NULL,   -- 0 = fallback used; review in the unmapped report
+    mapping_rule_id       VARCHAR(64)   NULL,
+    rules_version         VARCHAR(16)   NOT NULL,   -- lets you find and re-map records after a rule change
     captured_at           DATETIME2     NOT NULL,
     received_at           DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
 );
 CREATE INDEX ix_utm_campaign ON utm_attribution (utm_source, utm_medium, utm_campaign);
 CREATE INDEX ix_utm_customer ON utm_attribution (pos_customer_id);
+CREATE INDEX ix_utm_unmapped ON utm_attribution (mapped, utm_source, utm_medium);

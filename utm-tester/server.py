@@ -5,10 +5,13 @@ Local UTM test server (Python 3.8+, standard library only — nothing to install
 
 Endpoints
   GET  /                 test page (JavaScript parser runs in the browser)
-  POST /api/parse        {"input": "<url or query>"} -> Python parser result
-  POST /api/capture      parse + validate + save to a local SQLite test database
+  POST /api/parse        {"input": "<url or query>", "referrer": "...", "location_id": "..."}
+                         -> Python parser result + POS mapping (Lead Source / Lead Channel / note)
+  POST /api/capture      parse + map + save to a local SQLite test database
                          (simulates the API hub writing to the POS)
   GET  /api/records      last 10 saved records
+  GET  /api/unmapped     values no mapping rule recognised, most frequent first (review queue)
+  GET  /api/mapping      rules version and the POS lists in use
 """
 import json
 import os
@@ -21,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PARSER_DIR = os.path.join(os.path.dirname(HERE), "utm-parser")  # single source of truth
 sys.path.insert(0, PARSER_DIR)
 
+from utm_mapping import MappingConfigError, load_mapper  # noqa: E402
 from utm_parser import TOUCH_TYPES, parse_utm  # noqa: E402
 
 MAX_BODY = 64 * 1024
@@ -28,7 +32,8 @@ DB_PATH = os.path.join(HERE, "utm_test.db")
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 COLUMNS = ["touch_type", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
            "utm_id", "utm_source_platform", "utm_creative_format", "utm_marketing_tactic",
-           "click_ids_json", "extra_params_json", "landing_url", "captured_at"]
+           "click_ids_json", "extra_params_json", "landing_url", "referrer", "location_id", "captured_at",
+           "pos_lead_source", "pos_lead_channel", "mapped", "mapping_rule_id", "rules_version"]
 
 
 class BadRequest(Exception):
@@ -40,11 +45,20 @@ def connect():
     return closing(sqlite3.connect(DB_PATH))
 
 
+def _col_type(c):
+    return "INTEGER" if c == "mapped" else "TEXT"
+
+
 def init_db():
     with connect() as db, db:
         db.execute("CREATE TABLE IF NOT EXISTS utm_attribution (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                   + ", ".join(f"{c} TEXT" for c in COLUMNS)
+                   + ", ".join(f"{c} {_col_type(c)}" for c in COLUMNS)
                    + ", received_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+        # Upgrade test databases created before the POS mapping columns existed
+        existing = {row[1] for row in db.execute("PRAGMA table_info(utm_attribution)")}
+        for c in COLUMNS:
+            if c not in existing:
+                db.execute(f"ALTER TABLE utm_attribution ADD COLUMN {c} {_col_type(c)}")
 
 
 def parsed_dict(r):
@@ -92,6 +106,12 @@ class Handler(BaseHTTPRequestHandler):
         return parse_utm(inp, lowercase=self._bool(body, "lowercase", True),
                          include_click_ids=self._bool(body, "include_click_ids", True))
 
+    def _optional_str(self, body, key):
+        v = body.get(key)
+        if v is not None and not isinstance(v, str):
+            raise BadRequest(f"'{key}' must be a string")
+        return v or None
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
@@ -104,6 +124,21 @@ class Handler(BaseHTTPRequestHandler):
                 db.row_factory = sqlite3.Row
                 rows = db.execute("SELECT * FROM utm_attribution ORDER BY id DESC LIMIT 10").fetchall()
             return self._send(200, [dict(r) for r in rows])
+        if self.path == "/api/unmapped":
+            with connect() as db:
+                db.row_factory = sqlite3.Row
+                rows = db.execute("SELECT utm_source, utm_medium, utm_campaign, COUNT(*) AS count, MAX(received_at) AS last_seen "
+                                  "FROM utm_attribution WHERE mapped = 0 GROUP BY utm_source, utm_medium, utm_campaign "
+                                  "ORDER BY count DESC, last_seen DESC LIMIT 50").fetchall()
+            return self._send(200, [dict(r) for r in rows])
+        if self.path == "/api/mapping":
+            try:
+                m = load_mapper()
+            except MappingConfigError as e:
+                return self._send(500, {"error": "mapping configuration is invalid", "details": str(e).splitlines()})
+            return self._send(200, {"rules_version": m.version, "rule_count": len(m.rules),
+                                    "lead_sources": m.config["lead_sources"], "lead_channels": m.config["lead_channels"],
+                                    "fallback": m.config["fallback"], "pos_fields_touch": m.config.get("pos_fields_touch", "first")})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -113,22 +148,32 @@ class Handler(BaseHTTPRequestHandler):
             touch = body.get("touch", "last")
             if touch not in TOUCH_TYPES:
                 raise BadRequest("'touch' must be 'first' or 'last'")
+            ctx = {"landing_url": body.get("input"), "touch": touch,
+                   "referrer": self._optional_str(body, "referrer"),
+                   "location_id": self._optional_str(body, "location_id")}
         except BadRequest as e:
             return self._send(400, {"error": str(e)})
+        try:
+            mapper = load_mapper()
+        except MappingConfigError as e:
+            return self._send(500, {"error": "mapping configuration is invalid", "details": str(e).splitlines()})
+        p = r.to_api_payload(**ctx)
+        # The tester sends a single link, so it stands in for both first and last touch
+        pos = mapper.build_pos_record(last_touch=p, first_touch=p)
         if self.path == "/api/parse":
-            return self._send(200, {"parsed": parsed_dict(r), "errors": r.validate(),
-                                    "payload": r.to_api_payload(landing_url=body.get("input"))})
+            return self._send(200, {"parsed": parsed_dict(r), "errors": r.validate(), "payload": p, "pos": pos})
         if self.path == "/api/capture":
-            errors = r.validate()
-            if errors:
-                return self._send(422, {"errors": errors})
-            p = r.to_api_payload(landing_url=body.get("input"), touch=touch)
+            if not r.has_attribution and not ctx["referrer"]:
+                return self._send(422, {"errors": ["nothing to record: no UTMs, click IDs or referrer"]})
+            m = pos["mapping"]
+            p.update(pos_lead_source=pos["lead_source"], pos_lead_channel=pos["lead_channel"],
+                     mapped=int(m["mapped"]), mapping_rule_id=m["rule_id"], rules_version=m["rules_version"])
             p["click_ids_json"] = json.dumps(p.pop("click_ids"))
             p["extra_params_json"] = json.dumps(p.pop("extra_params"))
             with connect() as db, db:
                 cur = db.execute(f"INSERT INTO utm_attribution ({', '.join(COLUMNS)}) VALUES ({', '.join('?' * len(COLUMNS))})",
                                  [p.get(c) for c in COLUMNS])
-            return self._send(201, {"id": cur.lastrowid, "saved": p})
+            return self._send(201, {"id": cur.lastrowid, "saved": p, "pos": pos, "warnings": r.validate()})
         self._send(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):

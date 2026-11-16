@@ -1,0 +1,15 @@
+{
+  "_comment": "PLACEHOLDER values. Replace lead_sources / lead_channels with the exact values the POS accepts (case-sensitive). Every rule in mapping_rules.csv is checked against these lists when it is loaded.",
+  "lead_sources": [
+    "Google", "Bing", "Facebook", "Instagram", "TikTok", "LinkedIn", "Yelp", "Nextdoor",
+    "Angi", "Thumbtack", "Email", "Direct Mail", "Referral", "Partner", "Website", "Other", "Unknown"
+  ],
+  "lead_channels": [
+    "Paid Search", "Organic Search", "Paid Social", "Organic Social", "Email", "Display",
+    "Directory", "Referral", "Partner", "Offline", "Direct", "Unmapped"
+  ],
+  "fallback": { "lead_source": "Unknown", "lead_channel": "Unmapped" },
+  "pos_fields_touch": "first",
+  "internal_domains": ["mollymaid.com"],
+  "note_max_length": 1000
+}

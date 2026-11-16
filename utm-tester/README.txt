@@ -18,3 +18,14 @@ simulating the API hub writing to the POS. Delete utm_test.db to reset.
 Tip: you can open index.html directly without the server; only the JavaScript column works then.
 Run the tests: cd ../utm-parser && python3 -m unittest -v && node test_utm_parser.js
 To use another port: python server.py 8080
+
+POS mapping (Lead Source / Lead Channel)
+----------------------------------------
+The "POS mapping" panel shows the two values the POS would receive, the rule that chose
+them, and the note text. Optional Referrer / Location ID fields test rules that use them.
+  utm-parser/pos_lists.json     values the POS accepts (PLACEHOLDERS - replace with the real lists)
+  utm-parser/mapping_rules.csv  the rules; instructions are in the comment rows at the top
+Edit either file and click Parse again: the server reloads them automatically. If an edit
+is invalid (for example a Lead Source that is not in pos_lists.json), the panel lists every problem.
+Links no rule recognises get Unknown / Unmapped and appear in the "Unmapped review queue"
+once saved with "Send to test database".

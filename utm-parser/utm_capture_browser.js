@@ -6,7 +6,8 @@
  * API with the lead/booking.
  *
  * Hidden fields added per touch (prefix "first_" / "last_"):
- *   utm_source ... utm_marketing_tactic, click_ids (JSON), landing_url
+ *   utm_source ... utm_marketing_tactic, click_ids (JSON), landing_url, referrer
+ * The API hub rebuilds each touch with utm_mapping.payload_from_form() and maps it to POS values.
  */
 (function () {
   'use strict';
@@ -34,8 +35,18 @@
 
   var parsed;
   try { parsed = UtmParser.parse(window.location.href); } catch (e) { parsed = null; }
-  // Record visits with UTMs *or* only a click ID (e.g. Google Ads auto-tagging: ?gclid=...)
-  if (parsed && UtmParser.hasAttribution(parsed)) {
+  // Visits from another site (e.g. organic Google) count even without UTMs; moving between
+  // our own pages does not
+  function externalReferrer() {
+    try {
+      var ref = document.referrer ? new URL(document.referrer).hostname : '';
+      return !!ref && ref !== window.location.hostname;
+    } catch (e) { return false; }
+  }
+
+  // Record visits with UTMs, only a click ID (e.g. Google Ads auto-tagging: ?gclid=...),
+  // or an external referrer
+  if (parsed && (UtmParser.hasAttribution(parsed) || externalReferrer())) {
     var ctx = { landing_url: window.location.href.split('#')[0], referrer: document.referrer || null };
     if (!load(KEY_FIRST)) save(KEY_FIRST, UtmParser.toApiPayload(parsed, Object.assign({ touch: 'first' }, ctx)));
     save(KEY_LAST, UtmParser.toApiPayload(parsed, Object.assign({ touch: 'last' }, ctx)));
@@ -62,6 +73,7 @@
       var ids = data.click_ids || {};
       setField(form, prefix + 'click_ids', Object.keys(ids).length ? JSON.stringify(ids) : '');
       setField(form, prefix + 'landing_url', data.landing_url);
+      setField(form, prefix + 'referrer', data.referrer);
     });
   }
 

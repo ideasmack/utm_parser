@@ -17,7 +17,7 @@ function makeForm() {
   };
 }
 
-function visit(url, store) {
+function visit(url, store, referrer) {
   const listeners = [];
   function HTMLFormElement() {}
   HTMLFormElement.prototype.submit = function () { this.nativeSubmits++; };
@@ -29,14 +29,14 @@ function visit(url, store) {
       removeItem: (k) => { delete store[k]; },
     },
     document: {
-      referrer: 'https://ref.example/',
+      referrer: referrer || '',
       addEventListener: (t, fn) => listeners.push(fn),
       createElement: () => ({ type: '', name: '', value: '' }),
     },
     HTMLFormElement,
   };
   ctx.window = ctx; ctx.self = ctx;
-  ctx.window.location = { href: url };
+  ctx.window.location = { href: url, hostname: new URL(url).hostname };
   vm.createContext(ctx);
   vm.runInContext(PARSER, ctx);
   vm.runInContext(SNIPPET, ctx);
@@ -75,9 +75,19 @@ page.programmaticSubmit(form);
 assert.strictEqual(form.field('last_utm_campaign'), 'spring');
 assert.strictEqual(form.nativeSubmits, 1);
 
-// 5. a visit with nothing to record leaves storage alone
+// 5. visits with nothing to record (direct, or between our own pages) leave storage alone
 const before = JSON.stringify(store);
 visit('https://site.example/about', store);
+visit('https://site.example/about', store, 'https://site.example/book');
 assert.strictEqual(JSON.stringify(store), before);
+
+// 6. an external referrer with no UTMs (e.g. organic Google) is recorded, with the referrer sent on forms
+store = {};
+page = visit('https://site.example/', store, 'https://www.google.com/');
+attr = page.ctx.getUtmAttribution();
+assert.strictEqual(attr.first_touch.referrer, 'https://www.google.com/');
+form = makeForm();
+page.submitEvent(form);
+assert.strictEqual(form.field('last_referrer'), 'https://www.google.com/');
 
 console.log('All capture snippet tests passed');

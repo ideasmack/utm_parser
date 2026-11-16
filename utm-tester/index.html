@@ -31,17 +31,31 @@ pre{background:var(--code);padding:12px;border-radius:6px;overflow:auto;font-siz
 .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:0.82rem;font-weight:600;border:1px solid currentColor}
 .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
 .match{margin-block-start:8px;font-size:0.9rem}
+input[type=text]{font:0.9rem Consolas,monospace;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);inline-size:100%}
+.ctx{display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-block-start:10px}
+@media (max-width:800px){.ctx{grid-template-columns:1fr}}
+.ctx label{font-weight:600;font-size:0.9rem}
+.pos-values{display:flex;flex-wrap:wrap;gap:24px;margin-block-end:12px}
+.pos-values div{min-inline-size:150px}
+.pos-values .k{color:var(--muted);font-size:0.82rem;font-weight:600}
+.pos-values .v{font-size:1.25rem;font-weight:700}
 h2{font-size:1.1rem;margin:0 0 10px}
 </style>
 </head>
 <body>
 <main>
   <h1>UTM Parser Tester</h1>
-  <p class="sub">Paste a link or UTM query string. The JavaScript parser runs in this page. The Python parser runs on the local server, and the two results are compared.</p>
+  <p class="sub">Paste a link or UTM query string. The JavaScript parser runs in this page. The Python parser runs on the local server, the two results are compared, and the server maps the result to the POS Lead Source and Lead Channel.</p>
 
   <section class="card">
     <label for="utmInput">Link or UTM string</label>
     <textarea id="utmInput" spellcheck="false">https://www.mollymaid.com/book/?utm_source=Facebook&amp;utm_medium=paid_social&amp;utm_campaign=Spring%20Clean%202026&amp;utm_content=video_a&amp;fbclid=IwAR0AbC</textarea>
+    <div class="ctx">
+      <div><label for="refInput">Referrer (optional, used when there are no UTMs)</label>
+        <input type="text" id="refInput" spellcheck="false" placeholder="https://www.google.com/"></div>
+      <div><label for="locInput">Location ID (optional)</label>
+        <input type="text" id="locInput" spellcheck="false" placeholder="MM-1042"></div>
+    </div>
     <div class="row">
       <label><input type="checkbox" id="optLower" checked> Lowercase values</label>
       <label><input type="checkbox" id="optClick" checked> Include click IDs</label>
@@ -69,6 +83,18 @@ h2{font-size:1.1rem;margin:0 0 10px}
   </div>
 
   <section class="card">
+    <h2>POS mapping <span id="posBadge"></span></h2>
+    <div class="pos-values">
+      <div><div class="k">Lead Source</div><div class="v" id="posSource">&ndash;</div></div>
+      <div><div class="k">Lead Channel</div><div class="v" id="posChannel">&ndash;</div></div>
+      <div><div class="k">Rule</div><div class="v" id="posRule">&ndash;</div></div>
+    </div>
+    <label>Note sent to the POS</label>
+    <pre id="posNote"></pre>
+    <p class="sub" id="posMeta" style="margin:8px 0 0"></p>
+  </section>
+
+  <section class="card">
     <h2>API payload (what goes to the API hub / database)</h2>
     <pre id="payload"></pre>
   </section>
@@ -76,6 +102,12 @@ h2{font-size:1.1rem;margin:0 0 10px}
   <section class="card">
     <h2>Test database: last 10 saved records</h2>
     <table id="dbTable"></table>
+  </section>
+
+  <section class="card">
+    <h2>Unmapped review queue</h2>
+    <p class="sub">Saved records no rule recognised. Add a row to utm-parser/mapping_rules.csv to map them; the server picks up changes without a restart.</p>
+    <table id="unmappedTable"></table>
   </section>
 </main>
 
@@ -88,6 +120,9 @@ h2{font-size:1.1rem;margin:0 0 10px}
     'Email': '?utm_source=newsletter&utm_medium=email&utm_campaign=Nov_2026_Promo&utm_content=hero_button',
     'GA4 fields': 'utm_source=google&utm_medium=cpc&utm_campaign=fall&utm_id=12345&utm_source_platform=SA360&utm_creative_format=Video&utm_marketing_tactic=Prospecting',
     'Missing campaign': 'https://www.example.com/?UTM_Source=Facebook&utm_medium=social',
+    'Gclid only': 'https://www.example.com/?gclid=Cj0KCQiA',
+    'Unknown partner': 'https://www.example.com/?utm_source=SuperLeads&utm_medium=blast&utm_campaign=fall',
+    'Agency X': 'https://www.example.com/?utm_source=AgencyX&utm_medium=whatever&utm_campaign=q4',
     'Messy input': 'https://www.example.com/#/book?utm_source=%20%20Bing%20&utm_source=duplicate&utm_medium=CPC&utm_campaign=Spring++Sale&utm_custom=abc',
     'No UTMs': 'https://www.example.com/services/'
   };
@@ -101,6 +136,44 @@ h2{font-size:1.1rem;margin:0 0 10px}
     b.addEventListener('click', function () { $('utmInput').value = SAMPLES[name]; run(); });
     $('samples').appendChild(b);
   });
+
+  function requestBody(input) {
+    return { input: input, lowercase: opts().lowercase, include_click_ids: opts().includeClickIds,
+             referrer: $('refInput').value.trim() || null, location_id: $('locInput').value.trim() || null };
+  }
+
+  function renderPos(pos) {
+    var m = pos.mapping;
+    $('posSource').textContent = pos.lead_source;
+    $('posChannel').textContent = pos.lead_channel;
+    $('posRule').textContent = m.rule_id || 'none';
+    $('posNote').textContent = pos.note;
+    $('posMeta').textContent = 'Rules version ' + m.rules_version + ' · POS fields come from the ' + m.touch + ' touch';
+    var b = document.createElement('span');
+    b.className = 'badge ' + (m.mapped ? 'ok' : 'warn');
+    b.textContent = m.mapped ? 'mapped' : 'unmapped: fallback used';
+    $('posBadge').innerHTML = ''; $('posBadge').appendChild(b);
+  }
+
+  function showPosError(res) {
+    ['posSource', 'posChannel', 'posRule'].forEach(function (id) { $(id).textContent = '–'; });
+    $('posNote').textContent = (res.error || 'error') + (res.details ? ':\n' + res.details.join('\n') : '');
+    var b = document.createElement('span'); b.className = 'badge bad'; b.textContent = 'configuration error';
+    $('posBadge').innerHTML = ''; $('posBadge').appendChild(b);
+  }
+
+  function loadUnmapped() {
+    if (!serverUp) { $('unmappedTable').innerHTML = '<tr><td class="null">Available when running on the local server.</td></tr>'; return; }
+    fetch('/api/unmapped').then(function (r) { return r.json(); }).then(function (rows) {
+      var t = $('unmappedTable'); t.innerHTML = '';
+      var cols = ['utm_source', 'utm_medium', 'utm_campaign', 'count', 'last_seen'];
+      var hr = document.createElement('tr');
+      cols.forEach(function (c) { var th = document.createElement('th'); th.textContent = c; th.style.inlineSize = 'auto'; hr.appendChild(th); });
+      t.appendChild(hr);
+      if (!rows.length) { var tr0 = document.createElement('tr'), td0 = document.createElement('td'); td0.colSpan = cols.length; td0.textContent = 'Nothing unmapped.'; td0.className = 'null'; tr0.appendChild(td0); t.appendChild(tr0); }
+      rows.forEach(function (r) { var tr = document.createElement('tr'); cols.forEach(function (c) { tr.appendChild(cell(r[c])); }); t.appendChild(tr); });
+    });
+  }
 
   function opts() { return { lowercase: $('optLower').checked, includeClickIds: $('optClick').checked }; }
 
@@ -147,9 +220,11 @@ h2{font-size:1.1rem;margin:0 0 10px}
       return;
     }
     fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: input, lowercase: opts().lowercase, include_click_ids: opts().includeClickIds }) })
+      body: JSON.stringify(requestBody(input)) })
       .then(function (r) { return r.json(); })
       .then(function (py) {
+        if (py.error) { showPosError(py); return; }
+        renderPos(py.pos);
         renderTable($('pyTable'), py.parsed);
         badge($('pyValid'), py.errors);
         var same = comparable(py.parsed) === comparable(js);
@@ -163,7 +238,7 @@ h2{font-size:1.1rem;margin:0 0 10px}
     if (!serverUp) { $('dbTable').innerHTML = '<tr><td class="null">Available when running on the local server.</td></tr>'; return; }
     fetch('/api/records').then(function (r) { return r.json(); }).then(function (rows) {
       var t = $('dbTable'); t.innerHTML = '';
-      var cols = ['id','utm_source','utm_medium','utm_campaign','utm_term','utm_content','received_at'];
+      var cols = ['id','utm_source','utm_medium','utm_campaign','pos_lead_source','pos_lead_channel','mapping_rule_id','received_at'];
       var hr = document.createElement('tr');
       cols.forEach(function (c) { var th = document.createElement('th'); th.textContent = c; th.style.inlineSize = 'auto'; hr.appendChild(th); });
       t.appendChild(hr);
@@ -175,17 +250,20 @@ h2{font-size:1.1rem;margin:0 0 10px}
   $('saveBtn').addEventListener('click', function () {
     if (!serverUp) { $('status').textContent = 'Saving needs the local server.'; return; }
     fetch('/api/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: $('utmInput').value, lowercase: opts().lowercase, include_click_ids: opts().includeClickIds }) })
+      body: JSON.stringify(requestBody($('utmInput').value)) })
       .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
       .then(function (res) {
-        $('status').textContent = res.ok ? 'Saved as record #' + res.body.id : 'Not saved: ' + res.body.errors.join('; ');
-        loadDb();
+        $('status').textContent = res.ok ? 'Saved as record #' + res.body.id + ' (' + res.body.pos.lead_source + ' / ' + res.body.pos.lead_channel + ')'
+                                         : 'Not saved: ' + (res.body.errors || res.body.details || [res.body.error]).join('; ');
+        loadDb(); loadUnmapped();
       });
   });
   $('parseBtn').addEventListener('click', run);
   $('optLower').addEventListener('change', run);
   $('optClick').addEventListener('change', run);
-  run(); loadDb();
+  $('refInput').addEventListener('change', run);
+  $('locInput').addEventListener('change', run);
+  run(); loadDb(); loadUnmapped();
 })();
 </script>
 </body>

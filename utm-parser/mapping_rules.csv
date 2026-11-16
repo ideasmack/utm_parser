@@ -1,0 +1,38 @@
+rule_id,priority,location_id,has_utm,source,medium,campaign,click_id,referrer,lead_source,lead_channel,notes
+# HOW THIS FILE WORKS (rows whose rule_id starts with # are ignored),,,,,,,,,,,
+# Rules are checked lowest priority first; the first rule whose conditions ALL match wins.,,,,,,,,,,,
+# Blank condition = matches anything. Patterns are case-insensitive; use | for alternatives and * as a wildcard.,,,,,,,,,,,
+# (none) = the value is empty. has_utm: yes / no / blank. location_id: blank = all locations or a | list.,,,,,,,,,,,
+# click_id matches click ID names such as google_click_id. referrer matches the referring host without www.,,,,,,,,,,,
+# lead_source and lead_channel must be values from pos_lists.json. Nothing matched = fallback (Unknown / Unmapped).,,,,,,,,,,,
+partner_agency_x,5,,yes,agency_x|agencyx,,,,,Partner,Partner,Example third-party agency: everything they send is Partner
+google_paid,10,,yes,google|adwords|google_ads,cpc|ppc|paid*|sem|search_ads,,,,Google,Paid Search,
+bing_paid,11,,yes,bing|microsoft|msn,cpc|ppc|paid*|sem|search_ads,,,,Bing,Paid Search,
+facebook_paid,20,,yes,facebook|fb|meta|facebook.com|m.facebook.com,paid*|cpc|ppc|ads|*_ads,,,,Facebook,Paid Social,
+instagram_paid,21,,yes,instagram|ig|instagram.com,paid*|cpc|ppc|ads|*_ads,,,,Instagram,Paid Social,
+tiktok_paid,22,,yes,tiktok|tt,paid*|cpc|ppc|ads|*_ads,,,,TikTok,Paid Social,
+linkedin_paid,23,,yes,linkedin|li|lnkd,paid*|cpc|ppc|ads|*_ads,,,,LinkedIn,Paid Social,
+facebook_organic,30,,yes,facebook|fb|meta|facebook.com|m.facebook.com,social|organic*|post|(none),,,,Facebook,Organic Social,
+instagram_organic,31,,yes,instagram|ig|instagram.com,social|organic*|post|bio|(none),,,,Instagram,Organic Social,
+nextdoor,32,,yes,nextdoor*,,,,,Nextdoor,Organic Social,
+yelp,40,,yes,yelp*,,,,,Yelp,Directory,
+angi,41,,yes,angi|angies*|homeadvisor,,,,,Angi,Directory,
+thumbtack,42,,yes,thumbtack,,,,,Thumbtack,Directory,
+email,50,,yes,,email|e-mail|newsletter,,,,Email,Email,Any source with an email medium
+display,60,,yes,,display|banner|programmatic|cpm,,,,Other,Display,
+direct_mail,70,,yes,,direct_mail|directmail|print|mailer|postcard|qr,,,,Direct Mail,Offline,
+referral_utm,75,,yes,,referral,,,,Referral,Referral,
+clickid_google,80,,no,,,,google_*,,Google,Paid Search,No UTMs but a Google Ads click ID (auto-tagging)
+clickid_microsoft,81,,no,,,,microsoft_click_id,,Bing,Paid Search,
+clickid_facebook,82,,no,,,,facebook_click_id,,Facebook,Paid Social,Note: fbclid is also added to organic Facebook links
+clickid_tiktok,83,,no,,,,tiktok_click_id,,TikTok,Paid Social,
+clickid_linkedin,84,,no,,,,linkedin_click_id,,LinkedIn,Paid Social,
+ref_google,85,,no,,,,,google.*|*.google.*,Google,Organic Search,
+ref_bing,86,,no,,,,,bing.com,Bing,Organic Search,
+ref_other_search,87,,no,,,,,duckduckgo.com|*search.yahoo.com|yahoo.com|search.brave.com|ecosia.org,Other,Organic Search,
+ref_facebook,88,,no,,,,,facebook.com|*.facebook.com|l.facebook.com,Facebook,Organic Social,
+ref_instagram,89,,no,,,,,instagram.com|*.instagram.com,Instagram,Organic Social,
+ref_nextdoor,90,,no,,,,,nextdoor.com|*.nextdoor.com,Nextdoor,Organic Social,
+ref_yelp,91,,no,,,,,yelp.com|*.yelp.com,Yelp,Directory,
+ref_other_site,95,,no,,,,,*,Referral,Referral,Any other external site
+direct,99,,no,,,,(none),(none),Website,Direct,No UTMs no click ID no external referrer
