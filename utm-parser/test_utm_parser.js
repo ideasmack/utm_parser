@@ -1,0 +1,34 @@
+const assert = require('assert');
+const U = require('./utm_parser');
+let r = U.parse('https://x.com/p?utm_source=Google&utm_medium=cpc&utm_campaign=Brand%20Search&utm_term=maid+service&gclid=AbC123');
+assert.deepStrictEqual([r.source, r.medium, r.campaign, r.term], ['google', 'cpc', 'brand search', 'maid service']);
+assert.strictEqual(r.click_ids.google_click_id, 'AbC123');
+assert.ok(U.validate(r).valid);
+r = U.parse('?UTM_Source=email&utm_medium=newsletter');
+assert.strictEqual(r.source, 'email'); assert.ok(!U.validate(r).valid);
+assert.strictEqual(U.parse({ utm_campaign: '  Fall  Promo ' }).campaign, 'fall promo');
+assert.ok(!U.parse('https://x.com/').has_utm);
+assert.strictEqual(U.parse('utm_source=a&utm_source=b').source, 'a');
+assert.strictEqual(U.parse('https://x.com/#/book?utm_source=bing').source, 'bing');
+r = U.parse('utm_custom=x&utm_campaign=' + 'a'.repeat(300));
+assert.deepStrictEqual(r.extra, { utm_custom: 'x' }); assert.strictEqual(r.campaign.length, 255);
+assert.strictEqual(U.parse('utm_source=Facebook', { lowercase: false }).source, 'Facebook');
+const p = U.toApiPayload(U.parse('utm_source=a'), { touch: 'first', location_id: 'MM-1042' });
+assert.deepStrictEqual([p.utm_source, p.touch_type, p.location_id], ['a', 'first', 'MM-1042']);
+console.log('All JS tests passed');
+
+// --- regression tests for review fixes ---
+r = U.parse('utm_source=c%2B%2B&utm_term=a+b&gclid=Ab%2BCd');
+assert.deepStrictEqual([r.source, r.term, r.click_ids.google_click_id], ['c++', 'a b', 'Ab+Cd']);
+r = U.parse('gclid=x&gclid=y&utm_x=1&utm_x=2');
+assert.deepStrictEqual([r.click_ids, r.extra], [{ google_click_id: 'x' }, { utm_x: '1' }]);
+assert.deepStrictEqual(U.parse('gclid=&gclid=b').click_ids, { google_click_id: 'b' });
+assert.deepStrictEqual(U.parse('gclid=').click_ids, {});
+r = U.parse('https://x.com/?gclid=Cj0KCQ');
+assert.ok(!r.has_utm && U.hasAttribution(r)); assert.ok(!U.hasAttribution(U.parse('https://x.com/')));
+assert.strictEqual(U.parse('utm_campaign=%F0%9F%98%80%F0%9F%98%80', { maxLength: 1 }).campaign, '\u{1F600}');
+assert.strictEqual(U.parse('utm_campaign=ab%20cd', { maxLength: 3 }).campaign, 'ab');
+const p2 = U.toApiPayload(U.parse('utm_source=a'), { landing_url: 'h'.repeat(3000), referrer: 'r'.repeat(2500), touch: 'bogus' });
+assert.deepStrictEqual([p2.landing_url.length, p2.referrer.length, p2.touch_type], [2000, 2000, 'last']);
+assert.ok(!U.parse('constructor=1&utm_constructor=2').has_utm);
+console.log('All JS regression tests passed');

@@ -1,0 +1,8 @@
+# Local test database (recreated by server.py)
+utm-tester/utm_test.db
+*.db
+
+# Python / OS
+__pycache__/
+*.pyc
+.DS_Store

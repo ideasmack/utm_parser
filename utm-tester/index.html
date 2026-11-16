@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en-US" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>UTM Parser Tester</title>
+<style>
+:root{--bg:#f5f7fa;--card:#ffffff;--text:#1b2430;--muted:#5b6675;--border:#d9dee6;--accent:#0b5cad;--ok:#1e7b34;--warn:#a15c00;--bad:#b3261e;--code:#eef2f7}
+@media (prefers-color-scheme: dark){:root{--bg:#14181e;--card:#1d232b;--text:#e6ebf1;--muted:#9aa5b3;--border:#333c47;--accent:#6aa9ff;--ok:#6fd38a;--warn:#f0b35a;--bad:#ff8a80;--code:#262e38}}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+main{max-inline-size:1100px;margin-inline:auto;padding:24px}
+h1{margin:0 0 4px;font-size:1.6rem}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px;margin-block-end:18px}
+label{font-weight:600;display:block;margin-block-end:6px}
+textarea{inline-size:100%;min-block-size:70px;font:0.95rem Consolas,monospace;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-block-start:10px}
+button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 16px;font-weight:600;cursor:pointer}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.samples button{background:var(--code);color:var(--text);border:1px solid var(--border);font-weight:400;padding:6px 10px;font-size:0.85rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:800px){.grid{grid-template-columns:1fr}}
+table{border-collapse:collapse;inline-size:100%;font-size:0.92rem}
+th,td{text-align:start;padding:6px 8px;border-block-end:1px solid var(--border);vertical-align:top}
+th{color:var(--muted);font-weight:600;inline-size:45%}
+td code,pre{font-family:Consolas,monospace}
+.null{color:var(--muted);font-style:italic}
+pre{background:var(--code);padding:12px;border-radius:6px;overflow:auto;font-size:0.82rem;max-block-size:340px;margin:0}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:0.82rem;font-weight:600;border:1px solid currentColor}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.match{margin-block-start:8px;font-size:0.9rem}
+h2{font-size:1.1rem;margin:0 0 10px}
+</style>
+</head>
+<body>
+<main>
+  <h1>UTM Parser Tester</h1>
+  <p class="sub">Paste a link or UTM query string. The JavaScript parser runs in this page. The Python parser runs on the local server, and the two results are compared.</p>
+
+  <section class="card">
+    <label for="utmInput">Link or UTM string</label>
+    <textarea id="utmInput" spellcheck="false">https://www.mollymaid.com/book/?utm_source=Facebook&amp;utm_medium=paid_social&amp;utm_campaign=Spring%20Clean%202026&amp;utm_content=video_a&amp;fbclid=IwAR0AbC</textarea>
+    <div class="row">
+      <label><input type="checkbox" id="optLower" checked> Lowercase values</label>
+      <label><input type="checkbox" id="optClick" checked> Include click IDs</label>
+    </div>
+    <div class="row">
+      <button id="parseBtn">Parse</button>
+      <button id="saveBtn" class="secondary">Send to test database</button>
+      <span id="status" class="sub"></span>
+    </div>
+    <div class="row samples" id="samples">
+      <span class="sub">Samples:</span>
+    </div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>JavaScript parser (browser) <span id="jsValid"></span></h2>
+      <table id="jsTable"></table>
+    </section>
+    <section class="card">
+      <h2>Python parser (server) <span id="pyValid"></span></h2>
+      <table id="pyTable"></table>
+      <div id="matchNote" class="match"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>API payload (what goes to the API hub / database)</h2>
+    <pre id="payload"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Test database: last 10 saved records</h2>
+    <table id="dbTable"></table>
+  </section>
+</main>
+
+<script src="../utm-parser/utm_parser.js"></script>
+<script>
+(function () {
+  'use strict';
+  var SAMPLES = {
+    'Google Ads': 'https://www.example.com/?utm_source=google&utm_medium=cpc&utm_campaign=brand_search&utm_term=maid+service+near+me&utm_content=ad_v2&gclid=Cj0KCQiA',
+    'Email': '?utm_source=newsletter&utm_medium=email&utm_campaign=Nov_2026_Promo&utm_content=hero_button',
+    'GA4 fields': 'utm_source=google&utm_medium=cpc&utm_campaign=fall&utm_id=12345&utm_source_platform=SA360&utm_creative_format=Video&utm_marketing_tactic=Prospecting',
+    'Missing campaign': 'https://www.example.com/?UTM_Source=Facebook&utm_medium=social',
+    'Messy input': 'https://www.example.com/#/book?utm_source=%20%20Bing%20&utm_source=duplicate&utm_medium=CPC&utm_campaign=Spring++Sale&utm_custom=abc',
+    'No UTMs': 'https://www.example.com/services/'
+  };
+  var FIELDS = ['source','medium','campaign','term','content','campaign_id','source_platform','creative_format','marketing_tactic'];
+  var $ = function (id) { return document.getElementById(id); };
+  var serverUp = location.protocol.indexOf('http') === 0;
+
+  Object.keys(SAMPLES).forEach(function (name) {
+    var b = document.createElement('button');
+    b.textContent = name;
+    b.addEventListener('click', function () { $('utmInput').value = SAMPLES[name]; run(); });
+    $('samples').appendChild(b);
+  });
+
+  function opts() { return { lowercase: $('optLower').checked, includeClickIds: $('optClick').checked }; }
+
+  function cell(v) {
+    var td = document.createElement('td');
+    if (v === null || v === undefined || v === '') { td.textContent = 'null'; td.className = 'null'; }
+    else if (typeof v === 'object') {
+      if (!Object.keys(v).length) { td.textContent = '(none)'; td.className = 'null'; }
+      else { var c = document.createElement('code'); c.textContent = JSON.stringify(v); td.appendChild(c); }
+    } else { var c2 = document.createElement('code'); c2.textContent = String(v); td.appendChild(c2); }
+    return td;
+  }
+
+  function renderTable(table, parsed) {
+    table.innerHTML = '';
+    FIELDS.concat(['click_ids', 'extra', 'has_utm']).forEach(function (f) {
+      var tr = document.createElement('tr'), th = document.createElement('th');
+      th.textContent = f;
+      tr.appendChild(th); tr.appendChild(cell(parsed[f])); table.appendChild(tr);
+    });
+  }
+
+  function badge(el, errors) {
+    el.innerHTML = '';
+    var s = document.createElement('span');
+    s.className = 'badge ' + (errors.length ? 'warn' : 'ok');
+    s.textContent = errors.length ? errors.join('; ') : 'valid';
+    el.appendChild(s);
+  }
+
+  function comparable(p) { var o = {}; FIELDS.concat(['click_ids','extra','has_utm']).forEach(function (f) { o[f] = p[f]; }); return JSON.stringify(o); }
+
+  function run() {
+    var input = $('utmInput').value, js;
+    try { js = UtmParser.parse(input, opts()); }
+    catch (e) { $('status').textContent = 'Could not read that input: ' + e.message; return; }
+    $('status').textContent = '';
+    renderTable($('jsTable'), js);
+    badge($('jsValid'), UtmParser.validate(js).errors);
+    $('payload').textContent = JSON.stringify(UtmParser.toApiPayload(js, { landing_url: input, touch: 'last' }), null, 2);
+
+    if (!serverUp) {
+      $('pyTable').innerHTML = '<tr><td class="null">Start the local server (start.bat or start.sh) and open http://localhost:8000 to run the Python parser.</td></tr>';
+      return;
+    }
+    fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: input, lowercase: opts().lowercase, include_click_ids: opts().includeClickIds }) })
+      .then(function (r) { return r.json(); })
+      .then(function (py) {
+        renderTable($('pyTable'), py.parsed);
+        badge($('pyValid'), py.errors);
+        var same = comparable(py.parsed) === comparable(js);
+        $('matchNote').innerHTML = same ? '<span class="ok">&#10003; Python and JavaScript results match.</span>'
+                                        : '<span class="bad">&#9888; Python and JavaScript results differ.</span>';
+      })
+      .catch(function () { $('pyTable').innerHTML = '<tr><td class="bad">Python server not reachable.</td></tr>'; });
+  }
+
+  function loadDb() {
+    if (!serverUp) { $('dbTable').innerHTML = '<tr><td class="null">Available when running on the local server.</td></tr>'; return; }
+    fetch('/api/records').then(function (r) { return r.json(); }).then(function (rows) {
+      var t = $('dbTable'); t.innerHTML = '';
+      var cols = ['id','utm_source','utm_medium','utm_campaign','utm_term','utm_content','received_at'];
+      var hr = document.createElement('tr');
+      cols.forEach(function (c) { var th = document.createElement('th'); th.textContent = c; th.style.inlineSize = 'auto'; hr.appendChild(th); });
+      t.appendChild(hr);
+      if (!rows.length) { var tr0 = document.createElement('tr'), td0 = document.createElement('td'); td0.colSpan = cols.length; td0.textContent = 'No records yet.'; td0.className = 'null'; tr0.appendChild(td0); t.appendChild(tr0); }
+      rows.forEach(function (r) { var tr = document.createElement('tr'); cols.forEach(function (c) { tr.appendChild(cell(r[c])); }); t.appendChild(tr); });
+    });
+  }
+
+  $('saveBtn').addEventListener('click', function () {
+    if (!serverUp) { $('status').textContent = 'Saving needs the local server.'; return; }
+    fetch('/api/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: $('utmInput').value, lowercase: opts().lowercase, include_click_ids: opts().includeClickIds }) })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        $('status').textContent = res.ok ? 'Saved as record #' + res.body.id : 'Not saved: ' + res.body.errors.join('; ');
+        loadDb();
+      });
+  });
+  $('parseBtn').addEventListener('click', run);
+  $('optLower').addEventListener('change', run);
+  $('optClick').addEventListener('change', run);
+  run(); loadDb();
+})();
+</script>
+</body>
+</html>
